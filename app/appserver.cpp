@@ -1,15 +1,16 @@
 #ifndef WIN32
-#include <unistd.h>
-#include <cstdlib>
-#include <cstring>
-#include <netdb.h>
+   #include <unistd.h>
+   #include <cstdlib>
+   #include <cstring>
+   #include <netdb.h>
 #else
-#include <winsock2.h>
-#include <Ws2tcpip.h>
+   #include <winsock2.h>
+   #include <ws2tcpip.h>
+   #include <wspiapi.h>
 #endif
 #include <iostream>
 #include <udt.h>
-//#include "cc.h"
+#include "cc.h"
 
 using namespace std;
 
@@ -28,6 +29,9 @@ int main(int argc, char* argv[])
       return 0;
    }
 
+   // use this function to initialize the UDT library
+   UDT::startup();
+
    addrinfo hints;
    addrinfo* res;
 
@@ -38,11 +42,11 @@ int main(int argc, char* argv[])
    hints.ai_socktype = SOCK_STREAM;
    //hints.ai_socktype = SOCK_DGRAM;
 
-   char* service = "9000";
+   string service("9000");
    if (2 == argc)
       service = argv[1];
 
-   if (0 != getaddrinfo(NULL, service, &hints, &res))
+   if (0 != getaddrinfo(NULL, service.c_str(), &hints, &res))
    {
       cout << "illegal port number or port is busy.\n" << endl;
       return 0;
@@ -50,13 +54,11 @@ int main(int argc, char* argv[])
 
    UDTSOCKET serv = UDT::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 
-
    // UDT Options
    //UDT::setsockopt(serv, 0, UDT_CC, new CCCFactory<CUDPBlast>, sizeof(CCCFactory<CUDPBlast>));
-   //UDT::setsockopt(serv, 0, UDT_MSS, new int(7500), sizeof(int));
-   //UDT::setsockopt(serv, 0, UDT_RCVBUF, new int(100000000), sizeof(int));
-   //UDT::setsockopt(serv, 0, UDP_RCVBUF, new int(100000000), sizeof(int));
-
+   //UDT::setsockopt(serv, 0, UDT_MSS, new int(9000), sizeof(int));
+   //UDT::setsockopt(serv, 0, UDT_RCVBUF, new int(10000000), sizeof(int));
+   //UDT::setsockopt(serv, 0, UDP_RCVBUF, new int(10000000), sizeof(int));
 
    if (UDT::ERROR == UDT::bind(serv, res->ai_addr, res->ai_addrlen))
    {
@@ -66,7 +68,6 @@ int main(int argc, char* argv[])
 
    freeaddrinfo(res);
 
-
    cout << "server is ready at port: " << service << endl;
 
    if (UDT::ERROR == UDT::listen(serv, 10))
@@ -74,7 +75,6 @@ int main(int argc, char* argv[])
       cout << "listen: " << UDT::getlasterror().getErrorMessage() << endl;
       return 0;
    }
-
 
    sockaddr_storage clientaddr;
    int addrlen = sizeof(clientaddr);
@@ -94,16 +94,19 @@ int main(int argc, char* argv[])
       getnameinfo((sockaddr *)&clientaddr, addrlen, clienthost, sizeof(clienthost), clientservice, sizeof(clientservice), NI_NUMERICHOST|NI_NUMERICSERV);
       cout << "new connection: " << clienthost << ":" << clientservice << endl;
 
-#ifndef WIN32
-      pthread_t rcvthread;
-      pthread_create(&rcvthread, NULL, recvdata, new UDTSOCKET(recver));
-      pthread_detach(rcvthread);
-#else
-      CreateThread(NULL, 0, recvdata, new UDTSOCKET(recver), 0, NULL);
-#endif
+      #ifndef WIN32
+         pthread_t rcvthread;
+         pthread_create(&rcvthread, NULL, recvdata, new UDTSOCKET(recver));
+         pthread_detach(rcvthread);
+      #else
+         CreateThread(NULL, 0, recvdata, new UDTSOCKET(recver), 0, NULL);
+      #endif
    }
 
    UDT::close(serv);
+
+   // use this function to release the UDT library
+   UDT::cleanup();
 
    return 1;
 }
@@ -118,28 +121,35 @@ DWORD WINAPI recvdata(LPVOID usocket)
    delete (UDTSOCKET*)usocket;
 
    char* data;
-   int size = 10000000;
+   int size = 100000;
    data = new char[size];
-
-   int handle;
 
    while (true)
    {
-      if (UDT::ERROR == UDT::recv(recver, data, size, 0, &handle))
-      //if (UDT::ERROR == UDT::recvmsg(recver, data, size))
+      int rsize = 0;
+      int rs;
+      while (rsize < size)
       {
-         cout << "recv:" << UDT::getlasterror().getErrorMessage() << endl;
-         break;
+         if (UDT::ERROR == (rs = UDT::recv(recver, data + rsize, size - rsize, 0)))
+         {
+            cout << "recv:" << UDT::getlasterror().getErrorMessage() << endl;
+            break;
+         }
+
+         rsize += rs;
       }
+
+      if (rsize < size)
+         break;
    }
 
    delete [] data;
 
    UDT::close(recver);
 
-#ifndef WIN32
-   return NULL;
-#else
-   return 0;
-#endif
+   #ifndef WIN32
+      return NULL;
+   #else
+      return 0;
+   #endif
 }

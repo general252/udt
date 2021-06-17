@@ -1,38 +1,41 @@
 /*****************************************************************************
-Copyright © 2001 - 2006, The Board of Trustees of the University of Illinois.
-All Rights Reserved.
+Copyright (c) 2001 - 2011, The Board of Trustees of the University of Illinois.
+All rights reserved.
 
-UDP-based Data Transfer Library (UDT) version 3
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
 
-Laboratory for Advanced Computing (LAC)
-National Center for Data Mining (NCDM)
-University of Illinois at Chicago
-http://www.lac.uic.edu/
+* Redistributions of source code must retain the above
+  copyright notice, this list of conditions and the
+  following disclaimer.
 
-This library is free software; you can redistribute it and/or modify it
-under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or (at
-your option) any later version.
+* Redistributions in binary form must reproduce the
+  above copyright notice, this list of conditions
+  and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
 
-This library is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser
-General Public License for more details.
+* Neither the name of the University of Illinois
+  nor the names of its contributors may be used to
+  endorse or promote products derived from this
+  software without specific prior written permission.
 
-You should have received a copy of the GNU Lesser General Public License
-along with this library; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
-*****************************************************************************/
-
-/*****************************************************************************
-This file contains the implementation of UDT packet handling modules.
-
-A UDT packet is a 2-dimension vector of packet header and data.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *****************************************************************************/
 
 /*****************************************************************************
 written by
-   Yunhong Gu [gu@lac.uic.edu], last updated 03/23/2006
+   Yunhong Gu, last updated 02/12/2011
 *****************************************************************************/
 
 
@@ -56,6 +59,8 @@ written by
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //   |                          Time Stamp                           |
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |                     Destination Socket ID                     |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //
 //   bit 0:
 //      0: Data Packet
@@ -77,6 +82,8 @@ written by
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //   |                          Time Stamp                           |
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |                     Destination Socket ID                     |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //
 //   bit 1-15:
 //      0: Protocol Connection Handshake
@@ -90,12 +97,13 @@ written by
 //              Control Info: The sequence number to which (but not include) all the previous packets have beed received
 //              Optional:     RTT
 //                            RTT Variance
+//                            available receiver buffer size (in bytes)
 //                            advertised flow window size (number of packets)
 //                            estimated bandwidth (number of packets per second)
 //      3: Negative Acknowledgement (NAK)
 //              Add. Info:    Undefined
 //              Control Info: Loss list (see loss list coding below)
-//      4: Congestion Warning
+//      4: Congestion/Delay Warning
 //              Add. Info:    Undefined
 //              Control Info: None
 //      5: Shutdown
@@ -108,7 +116,10 @@ written by
 //              Add. Info:    Message ID
 //              Control Info: first sequence number of the message
 //                            last seqeunce number of the message
-//      65535: Explained by bits 16 - 31
+//      8: Error Signal from the Peer Side
+//              Add. Info:    Error code
+//              Control Info: None
+//      0x7FFF: Explained by bits 16 - 31
 //              
 //   bit 16 - 31:
 //      This space is used for future expansion or user defined control packets. 
@@ -132,10 +143,12 @@ written by
 //      the original sequence numbers in the field.
 
 
+#include <cstring>
 #include "packet.h"
 
 
-const int CPacket::m_iPktHdrSize = 12;
+const int CPacket::m_iPktHdrSize = 16;
+const int CHandShake::m_iContentSize = 48;
 
 
 // Set up the aliases in the constructure
@@ -143,10 +156,16 @@ CPacket::CPacket():
 m_iSeqNo((int32_t&)(m_nHeader[0])),
 m_iMsgNo((int32_t&)(m_nHeader[1])),
 m_iTimeStamp((int32_t&)(m_nHeader[2])),
-m_pcData((char*&)(m_PacketVector[1].iov_base))
+m_iID((int32_t&)(m_nHeader[3])),
+m_pcData((char*&)(m_PacketVector[1].iov_base)),
+__pad()
 {
+   for (int i = 0; i < 4; ++ i)
+      m_nHeader[i] = 0;
    m_PacketVector[0].iov_base = (char *)m_nHeader;
    m_PacketVector[0].iov_len = CPacket::m_iPktHdrSize;
+   m_PacketVector[1].iov_base = NULL;
+   m_PacketVector[1].iov_len = 0;
 }
 
 CPacket::~CPacket()
@@ -205,7 +224,7 @@ void CPacket::pack(const int& pkttype, void* lparam, void* rparam, const int& si
       // control info field should be none
       // but "writev" does not allow this
       m_PacketVector[1].iov_base = (char *)&__pad; //NULL;
-      m_PacketVector[1].iov_len = 4; //0
+      m_PacketVector[1].iov_len = 4; //0;
   
       break;
 
@@ -213,7 +232,7 @@ void CPacket::pack(const int& pkttype, void* lparam, void* rparam, const int& si
       // control info field should be none
       // but "writev" does not allow this
       m_PacketVector[1].iov_base = (char *)&__pad; //NULL;
-      m_PacketVector[1].iov_len = 4; //0
+      m_PacketVector[1].iov_len = 4; //0;
 
       break;
 
@@ -228,7 +247,7 @@ void CPacket::pack(const int& pkttype, void* lparam, void* rparam, const int& si
       // control info field should be none
       // but "writev" does not allow this
       m_PacketVector[1].iov_base = (char *)&__pad; //NULL;
-      m_PacketVector[1].iov_len = 4; //0
+      m_PacketVector[1].iov_len = 4; //0;
 
       break;
 
@@ -242,11 +261,22 @@ void CPacket::pack(const int& pkttype, void* lparam, void* rparam, const int& si
 
       break;
 
-   case 65535: //0x7FFF - Reserved for user defined control packets
+   case 8: //1000 - Error Signal from the Peer Side
+      // Error type
+      m_nHeader[1] = *(int32_t *)lparam;
+
+      // control info field should be none
+      // but "writev" does not allow this
+      m_PacketVector[1].iov_base = (char *)&__pad; //NULL;
+      m_PacketVector[1].iov_len = 4; //0;
+
+      break;
+
+   case 32767: //0x7FFF - Reserved for user defined control packets
       // for extended control packet
-      // "lparam" contains the extneded type information for bit 4 - 15
+      // "lparam" contains the extended type information for bit 16 - 31
       // "rparam" is the control information
-      m_nHeader[0] |= (*(int32_t *)lparam) << 16;
+      m_nHeader[0] |= *(int32_t *)lparam;
 
       if (NULL != rparam)
       {
@@ -311,4 +341,71 @@ int32_t CPacket::getMsgSeq() const
 {
    // read [1] bit 3~31
    return m_nHeader[1] & 0x1FFFFFFF;
+}
+
+CPacket* CPacket::clone() const
+{
+   CPacket* pkt = new CPacket;
+   memcpy(pkt->m_nHeader, m_nHeader, m_iPktHdrSize);
+   pkt->m_pcData = new char[m_PacketVector[1].iov_len];
+   memcpy(pkt->m_pcData, m_pcData, m_PacketVector[1].iov_len);
+   pkt->m_PacketVector[1].iov_len = m_PacketVector[1].iov_len;
+
+   return pkt;
+}
+
+CHandShake::CHandShake():
+m_iVersion(0),
+m_iType(0),
+m_iISN(0),
+m_iMSS(0),
+m_iFlightFlagSize(0),
+m_iReqType(0),
+m_iID(0),
+m_iCookie(0)
+{
+   for (int i = 0; i < 4; ++ i)
+      m_piPeerIP[i] = 0;
+}
+
+int CHandShake::serialize(char* buf, int& size)
+{
+   if (size < m_iContentSize)
+      return -1;
+
+   int32_t* p = (int32_t*)buf;
+   *p++ = m_iVersion;
+   *p++ = m_iType;
+   *p++ = m_iISN;
+   *p++ = m_iMSS;
+   *p++ = m_iFlightFlagSize;
+   *p++ = m_iReqType;
+   *p++ = m_iID;
+   *p++ = m_iCookie;
+   for (int i = 0; i < 4; ++ i)
+      *p++ = m_piPeerIP[i];
+
+   size = m_iContentSize;
+
+   return 0;
+}
+
+int CHandShake::deserialize(const char* buf, const int& size)
+{
+   if (size < m_iContentSize)
+      return -1;
+
+   int32_t* p = (int32_t*)buf;
+   m_iVersion = *p++;
+   m_iType = *p++;
+   m_iISN = *p++;
+   m_iMSS = *p++;
+   m_iFlightFlagSize = *p++;
+   m_iReqType = *p++;
+   m_iID = *p++;
+   m_iCookie = *p++;
+   for (int i = 0; i < 4; ++ i)
+      m_piPeerIP[i] = *p++;
+
+   return 0;
 }

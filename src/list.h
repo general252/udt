@@ -1,36 +1,41 @@
 /*****************************************************************************
-Copyright © 2001 - 2006, The Board of Trustees of the University of Illinois.
-All Rights Reserved.
+Copyright (c) 2001 - 2011, The Board of Trustees of the University of Illinois.
+All rights reserved.
 
-UDP-based Data Transfer Library (UDT) version 3
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
 
-Laboratory for Advanced Computing (LAC)
-National Center for Data Mining (NCDM)
-University of Illinois at Chicago
-http://www.lac.uic.edu/
+* Redistributions of source code must retain the above
+  copyright notice, this list of conditions and the
+  following disclaimer.
 
-This library is free software; you can redistribute it and/or modify it
-under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or (at
-your option) any later version.
+* Redistributions in binary form must reproduce the
+  above copyright notice, this list of conditions
+  and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
 
-This library is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser
-General Public License for more details.
+* Neither the name of the University of Illinois
+  nor the names of its contributors may be used to
+  endorse or promote products derived from this
+  software without specific prior written permission.
 
-You should have received a copy of the GNU Lesser General Public License
-along with this library; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
-*****************************************************************************/
-
-/*****************************************************************************
-This header file contains the definition of List structures used in UDT.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *****************************************************************************/
 
 /*****************************************************************************
 written by
-   Yunhong Gu [gu@lac.uic.edu], last updated 03/23/2006
+   Yunhong Gu, last updated 01/22/2011
 *****************************************************************************/
 
 #ifndef __UDT_LIST_H__
@@ -44,7 +49,7 @@ written by
 class CSndLossList
 {
 public:
-   CSndLossList(const int& size);
+   CSndLossList(const int& size = 1024);
    ~CSndLossList();
 
       // Functionality:
@@ -95,6 +100,10 @@ private:
    int m_iLastInsertPos;                // position of last insert node
 
    pthread_mutex_t m_ListLock;          // used to synchronize list operation
+
+private:
+   CSndLossList(const CSndLossList&);
+   CSndLossList& operator=(const CSndLossList&);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -102,7 +111,7 @@ private:
 class CRcvLossList
 {
 public:
-   CRcvLossList(const int& size);
+   CRcvLossList(const int& size = 1024);
    ~CRcvLossList();
 
       // Functionality:
@@ -168,17 +177,14 @@ public:
       //    0) [out] array: the result list of seq. no. to be included in NAK.
       //    1) [out] physical length of the result array.
       //    2) [in] limit: maximum length of the array.
-      //    3) [in] threshold: Time threshold from last NAK report.
       // Returned value:
       //    None.
 
-   void getLossArray(int32_t* array, int& len, const int& limit, const int& threshold);
+   void getLossArray(int32_t* array, int& len, const int& limit);
 
 private:
    int32_t* m_piData1;                  // sequence number starts
    int32_t* m_piData2;                  // sequence number ends
-   timeval* m_pLastFeedbackTime;        // last feedback time of the node
-   int* m_piCount;                      // report counter
    int* m_piNext;                       // next node in the list
    int* m_piPrior;                      // prior node in the list;
 
@@ -186,53 +192,10 @@ private:
    int m_iTail;                         // last node in the list;
    int m_iLength;                       // loss length
    int m_iSize;                         // size of the static array
-};
-
-////////////////////////////////////////////////////////////////////////////////
-
-class CIrregularPktList
-{
-public:
-   CIrregularPktList(const int& size);
-   ~CIrregularPktList();
-
-      // Functionality:
-      //    Read the total size error of all the irregular packets prior to "seqno".
-      // Parameters:
-      //    0) [in] seqno: sequence number.
-      // Returned value:
-      //    the total size error of all the irregular packets prior to (excluding) "seqno".
-
-   int currErrorSize(const int32_t& seqno) const;
-
-      // Functionality:
-      //    Insert an irregular packet into the list.
-      // Parameters:
-      //    0) [in] seqno: sequence number.
-      //    1) [in] errsize: size error of the current packet.
-      // Returned value:
-      //    None
-
-   void addIrregularPkt(const int32_t& seqno, const int& errsize);
-
-      // Functionality:
-      //    Remove ALL the packets prior to "seqno".
-      // Parameters:
-      //    0) [in] seqno: sequence number.
-      // Returned value:
-      //    None
-
-   void deleteIrregularPkt(const int32_t& seqno);
 
 private:
-   int32_t* m_piData;                   // sequence number
-   int* m_piErrorSize;                  // size error of the node
-   int* m_piNext;                       // next node in the list
-
-   int m_iHead;                         // first node in the list
-   int m_iLength;                       // number of irregular packets in the list
-   int m_iSize;                         // size of the static array
-   int m_iInsertPos;                    // last node insert position
+   CRcvLossList(const CRcvLossList&);
+   CRcvLossList& operator=(const CRcvLossList&);
 };
 
 

@@ -1,36 +1,41 @@
 /*****************************************************************************
-Copyright © 2001 - 2006, The Board of Trustees of the University of Illinois.
-All Rights Reserved.
+Copyright (c) 2001 - 2011, The Board of Trustees of the University of Illinois.
+All rights reserved.
 
-UDP-based Data Transfer Library (UDT) version 3
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
 
-Laboratory for Advanced Computing (LAC)
-National Center for Data Mining (NCDM)
-University of Illinois at Chicago
-http://www.lac.uic.edu/
+* Redistributions of source code must retain the above
+  copyright notice, this list of conditions and the
+  following disclaimer.
 
-This library is free software; you can redistribute it and/or modify it
-under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or (at
-your option) any later version.
+* Redistributions in binary form must reproduce the
+  above copyright notice, this list of conditions
+  and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
 
-This library is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser
-General Public License for more details.
+* Neither the name of the University of Illinois
+  nor the names of its contributors may be used to
+  endorse or promote products derived from this
+  software without specific prior written permission.
 
-You should have received a copy of the GNU Lesser General Public License
-along with this library; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
-*****************************************************************************/
-
-/*****************************************************************************
-This header file contains the definition of UDT buffer structure and operations.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *****************************************************************************/
 
 /*****************************************************************************
 written by
-   Yunhong Gu [gu@lac.uic.edu], last updated 07/20/2006
+   Yunhong Gu, last updated 05/07/2011
 *****************************************************************************/
 
 #ifndef __UDT_CORE_H__
@@ -46,13 +51,23 @@ written by
 #include "channel.h"
 #include "api.h"
 #include "ccc.h"
+#include "cache.h"
+#include "queue.h"
 
+enum UDTSockType {UDT_STREAM = 1, UDT_DGRAM};
 
-class UDT_API CUDT
+class CUDT
 {
-friend struct CUDTSocket;
+friend class CUDTSocket;
 friend class CUDTUnited;
 friend class CCC;
+friend struct CUDTComp;
+friend class CCache<CInfoBlock>;
+friend class CRendezvousQueue;
+friend class CSndQueue;
+friend class CRcvQueue;
+friend class CSndUList;
+friend class CRcvUList;
 
 private: // constructor and desctructor
    CUDT();
@@ -61,8 +76,11 @@ private: // constructor and desctructor
    ~CUDT();
 
 public: //API
+   static int startup();
+   static int cleanup();
    static UDTSOCKET socket(int af, int type = SOCK_STREAM, int protocol = 0);
    static int bind(UDTSOCKET u, const sockaddr* name, int namelen);
+   static int bind(UDTSOCKET u, UDPSOCKET udpsock);
    static int listen(UDTSOCKET u, int backlog);
    static UDTSOCKET accept(UDTSOCKET u, sockaddr* addr, int* addrlen);
    static int connect(UDTSOCKET u, const sockaddr* name, int namelen);
@@ -71,31 +89,37 @@ public: //API
    static int getsockname(UDTSOCKET u, sockaddr* name, int* namelen);
    static int getsockopt(UDTSOCKET u, int level, UDTOpt optname, void* optval, int* optlen);
    static int setsockopt(UDTSOCKET u, int level, UDTOpt optname, const void* optval, int optlen);
-   static int shutdown(UDTSOCKET u, int how);
-   static int send(UDTSOCKET u, const char* buf, int len, int flags = 0, int* handle = NULL, UDT_MEM_ROUTINE routine = NULL, void* context = NULL);
-   static int recv(UDTSOCKET u, char* buf, int len, int flags = 0, int* handle = NULL, UDT_MEM_ROUTINE routine = NULL, void* context = NULL);
+   static int send(UDTSOCKET u, const char* buf, int len, int flags);
+   static int recv(UDTSOCKET u, char* buf, int len, int flags);
    static int sendmsg(UDTSOCKET u, const char* buf, int len, int ttl = -1, bool inorder = false);
    static int recvmsg(UDTSOCKET u, char* buf, int len);
-   static int64_t sendfile(UDTSOCKET u, std::ifstream& ifs, const int64_t& offset, int64_t& size, const int& block = 366000);
-   static int64_t recvfile(UDTSOCKET u, std::ofstream& ofs, const int64_t& offset, int64_t& size, const int& block = 7320000);
-   static bool getoverlappedresult(UDTSOCKET u, int handle, int& progress, bool wait = false);
+   static int64_t sendfile(UDTSOCKET u, std::fstream& ifs, int64_t& offset, const int64_t& size, const int& block = 364000);
+   static int64_t recvfile(UDTSOCKET u, std::fstream& ofs, int64_t& offset, const int64_t& size, const int& block = 7280000);
    static int select(int nfds, ud_set* readfds, ud_set* writefds, ud_set* exceptfds, const timeval* timeout);
+   static int selectEx(const std::vector<UDTSOCKET>& fds, std::vector<UDTSOCKET>* readfds, std::vector<UDTSOCKET>* writefds, std::vector<UDTSOCKET>* exceptfds, int64_t msTimeOut);
+   static int epoll_create();
+   static int epoll_add_usock(const int eid, const UDTSOCKET u, const int* events = NULL);
+   static int epoll_add_ssock(const int eid, const SYSSOCKET s, const int* events = NULL);
+   static int epoll_remove_usock(const int eid, const UDTSOCKET u, const int* events = NULL);
+   static int epoll_remove_ssock(const int eid, const SYSSOCKET s, const int* events = NULL);
+   static int epoll_wait(const int eid, std::set<UDTSOCKET>* readfds, std::set<UDTSOCKET>* writefds, int64_t msTimeOut, std::set<SYSSOCKET>* lrfds = NULL, std::set<SYSSOCKET>* wrfds = NULL);
+   static int epoll_release(const int eid);
    static CUDTException& getlasterror();
    static int perfmon(UDTSOCKET u, CPerfMon* perf, bool clear = true);
+   static UDTSTATUS getsockstate(UDTSOCKET u);
 
 public: // internal API
-   static bool isUSock(UDTSOCKET u);
    static CUDT* getUDTHandle(UDTSOCKET u);
 
 private:
       // Functionality:
       //    initialize a UDT entity and bind to a local address.
       // Parameters:
-      //    0) [in] addr: pointer to the local address to be bound to.
+      //    None.
       // Returned value:
       //    None.
 
-   void open(const sockaddr* addr = NULL);
+   void open();
 
       // Functionality:
       //    Start listening to any connection request.
@@ -116,6 +140,15 @@ private:
    void connect(const sockaddr* peer);
 
       // Functionality:
+      //    Process the response handshake packet.
+      // Parameters:
+      //    0) [in] pkt: handshake packet.
+      // Returned value:
+      //    Return 0 if connected, positive value if connection is in progress, otherwise error code.
+
+   int connect(const CPacket& pkt) throw ();
+
+      // Functionality:
       //    Connect to a UDT entity listening at address "peer", which has sent "hs" request.
       // Parameters:
       //    0) [in] peer: The address of the listening UDT entity.
@@ -133,29 +166,26 @@ private:
       //    None.
 
    void close();
+
       // Functionality:
       //    Request UDT to send out a data block "data" with size of "len".
       // Parameters:
       //    0) [in] data: The address of the application data to be sent.
       //    1) [in] len: The size of the data block.
-      //    2) [in, out] overlapped: A pointer to the returned overlapped IO handle.
-      //    3) [in] func: pointer to a function to process the buffer after overlapped IO is completed.
       // Returned value:
       //    Actual size of data sent.
 
-   int send(char* data, const int& len,  int* overlapped = NULL, const UDT_MEM_ROUTINE func = NULL, void* context = NULL);
+   int send(const char* data, const int& len);
 
       // Functionality:
       //    Request UDT to receive data to a memory block "data" with size of "len".
       // Parameters:
       //    0) [out] data: data received.
       //    1) [in] len: The desired size of data to be received.
-      //    2) [out] overlapped: A pointer to the returned overlapped IO handle.
-      //    3) [in] unused.
       // Returned value:
       //    Actual size of data received.
 
-   int recv(char* data, const int& len, int* overlapped = NULL, const UDT_MEM_ROUTINE func = NULL, void* context = NULL);
+   int recv(char* data, const int& len);
 
       // Functionality:
       //    send a message of a memory block "data" with size of "len".
@@ -180,39 +210,28 @@ private:
    int recvmsg(char* data, const int& len);
 
       // Functionality:
-      //    query the result of an overlapped IO indicated by "handle".
-      // Parameters:
-      //    0) [in] handle: the handle that indicates the submitted overlapped IO.
-      //    1) [out] progess: how many data left to be sent/receive.
-      //    2) [in] wait: wait for the IO finished or not.
-      // Returned value:
-      //    if the overlapped IO is completed.
-
-   bool getOverlappedResult(const int& handle, int& progress, const bool& wait = false);
-
-      // Functionality:
       //    Request UDT to send out a file described as "fd", starting from "offset", with size of "size".
       // Parameters:
       //    0) [in] ifs: The input file stream.
-      //    1) [in] offset: From where to read and send data;
+      //    1) [in, out] offset: From where to read and send data; output is the new offset when the call returns.
       //    2) [in] size: How many data to be sent.
       //    3) [in] block: size of block per read from disk
       // Returned value:
       //    Actual size of data sent.
 
-   int64_t sendfile(std::ifstream& ifs, const int64_t& offset, const int64_t& size, const int& block = 366000);
+   int64_t sendfile(std::fstream& ifs, int64_t& offset, const int64_t& size, const int& block = 366000);
 
       // Functionality:
       //    Request UDT to receive data into a file described as "fd", starting from "offset", with expected size of "size".
       // Parameters:
       //    0) [out] ofs: The output file stream.
-      //    1) [in] offset: From where to write data;
+      //    1) [in, out] offset: From where to write data; output is the new offset when the call returns.
       //    2) [in] size: How many data to be received.
       //    3) [in] block: size of block per write to disk
       // Returned value:
       //    Actual size of data received.
 
-   int64_t recvfile(std::ofstream& ofs, const int64_t& offset, const int64_t& size, const int& block = 7320000);
+   int64_t recvfile(std::fstream& ofs, int64_t& offset, const int64_t& size, const int& block = 7320000);
 
       // Functionality:
       //    Configure UDT options.
@@ -253,75 +272,60 @@ public:
    static const UDTSOCKET INVALID_SOCK;         // invalid socket descriptor
    static const int ERROR;                      // socket api error returned value
 
-private:
+private: // Identification
    UDTSOCKET m_SocketID;                        // UDT socket number
-   int m_iSockType;                             // Type of the UDT connection (SOCK_STREAM or SOCK_DGRAM)
+   UDTSockType m_iSockType;                     // Type of the UDT connection (SOCK_STREAM or SOCK_DGRAM)
+   UDTSOCKET m_PeerID;				// peer id, for multiplexer
+   static const int m_iVersion;                 // UDT version, for compatibility use
 
-private: // Version
-   const int m_iVersion;                        // UDT version, for compatibility use
-
-private: // Threads, data channel, and timing facility
-#ifndef WIN32
-   bool m_bSndThrStart;                         // lazy snd thread creation
-#endif
-   pthread_t m_SndThread;                       // Sending thread
-   pthread_t m_RcvThread;                       // Receiving thread
-   CChannel* m_pChannel;                        // UDP channel
-   CTimer* m_pTimer;                            // Timing facility
-   uint64_t m_ullCPUFrequency;                  // CPU clock frequency, used for Timer
-
-private: // Timing intervals
-   const int m_iSYNInterval;                    // Periodical Rate Control Interval, 10 microseconds
-   const int m_iSelfClockInterval;              // ACK interval for self-clocking
-
-private: // Packet size and sequence number attributes
+private: // Packet sizes
    int m_iPktSize;                              // Maximum/regular packet size, in bytes
    int m_iPayloadSize;                          // Maximum/regular payload size, in bytes
 
 private: // Options
-   int m_iMSS;                                  // Maximum Segment Size
+   int m_iMSS;                                  // Maximum Segment Size, in bytes
    bool m_bSynSending;                          // Sending syncronization mode
    bool m_bSynRecving;                          // Receiving syncronization mode
    int m_iFlightFlagSize;                       // Maximum number of packets in flight from the peer side
-   int m_iSndQueueLimit;                        // Maximum length of the sending buffer queue
-   int m_iUDTBufSize;                           // UDT buffer size (for receiving)
+   int m_iSndBufSize;                           // Maximum UDT sender buffer size
+   int m_iRcvBufSize;                           // Maximum UDT receiver buffer size
    linger m_Linger;                             // Linger information on close
    int m_iUDPSndBufSize;                        // UDP sending buffer size
    int m_iUDPRcvBufSize;                        // UDP receiving buffer size
-   int m_iMaxMsg;                               // Maximum message size of datagram UDT connection
-   int m_iMsgTTL;                               // Time-to-live of a datagram message, in microseconds
    int m_iIPversion;                            // IP version
    bool m_bRendezvous;                          // Rendezvous connection mode
    int m_iSndTimeOut;                           // sending timeout in milliseconds
    int m_iRcvTimeOut;                           // receiving timeout in milliseconds
+   bool m_bReuseAddr;				// reuse an exiting port or not, for UDP multiplexer
+   int64_t m_llMaxBW;				// maximum data transfer rate (threshold)
 
-   const int m_iQuickStartPkts;                 // Number of packets to be sent as a quick start
-
-private: // CCC
+private: // congestion control
    CCCVirtualFactory* m_pCCFactory;             // Factory class to create a specific CC instance
-   CCC* m_pCC;                                  // custom congestion control class
+   CCC* m_pCC;                                  // congestion control class
+   CCache<CInfoBlock>* m_pCache;		// network information cache
 
 private: // Status
    volatile bool m_bListening;                  // If the UDT entit is listening to connection
+   volatile bool m_bConnecting;			// The short phase when connect() is called but not yet completed
    volatile bool m_bConnected;                  // Whether the connection is on or off
    volatile bool m_bClosing;                    // If the UDT entity is closing
    volatile bool m_bShutdown;                   // If the peer side has shutdown the connection
    volatile bool m_bBroken;                     // If the connection has been broken
+   volatile bool m_bPeerHealth;                 // If the peer status is normal
    bool m_bOpened;                              // If the UDT entity has been opened
-   bool m_bSndSlowStart;                        // If UDT is during slow start phase (snd side flag)
-   bool m_bRcvSlowStart;                        // If UDT is during slow start phase (rcv side flag)
-   bool m_bFreeze;                              // freeze the data sending
+   int m_iBrokenCounter;			// a counter (number of GC checks) to let the GC tag this socket as disconnected
+
    int m_iEXPCount;                             // Expiration counter
-   int m_iBandwidth;                            // Estimated bandwidth
+   int m_iBandwidth;                            // Estimated bandwidth, number of packets per second
+   int m_iRTT;                                  // RTT, in microseconds
+   int m_iRTTVar;                               // RTT variance
+   int m_iDeliveryRate;				// Packet arrival rate at the receiver side
 
-private: // connection setup
-   pthread_t m_ListenThread;
+   uint64_t m_ullLingerExpiration;		// Linger expiration time (for GC to close a socket with data in sending buffer)
 
-   #ifndef WIN32
-      static void* listenHandler(void* listener);
-   #else
-      static DWORD WINAPI listenHandler(LPVOID listener);
-   #endif
+   CHandShake m_ConnReq;			// connection request
+   CHandShake m_ConnRes;			// connection response
+   int64_t m_llLastReqTime;			// last time when a connection request is sent
 
 private: // Sending related data
    CSndBuffer* m_pSndBuffer;                    // Sender buffer
@@ -329,84 +333,46 @@ private: // Sending related data
    CPktTimeWindow* m_pSndTimeWindow;            // Packet sending time window
 
    volatile uint64_t m_ullInterval;             // Inter-packet time, in CPU clock cycles
-   uint64_t m_ullLastDecRate;                   // inter-packet time when last decrease occurs
    uint64_t m_ullTimeDiff;                      // aggregate difference in inter-packet time
 
    volatile int m_iFlowWindowSize;              // Flow control window size
-   int m_iMaxFlowWindowSize;                    // Maximum flow window size = flight flag size of the peer side
    volatile double m_dCongestionWindow;         // congestion window size
 
-   int m_iNAKCount;                             // NAK counter
-   int m_iDecRandom;                            // random threshold on decrease by number of loss events
-   int m_iAvgNAKNum;                            // average number of NAKs per congestion
-   int m_iDecCount;				// number of rate decrease in the current congestion period
-
-   timeval m_LastSYNTime;                       // the timestamp when last rate control occured
-   bool m_bLoss;                                // if there is any loss during last RC period
-
    volatile int32_t m_iSndLastAck;              // Last ACK received
-   int32_t m_iSndLastDataAck;                   // The real last ACK that updates the sender buffer and loss list
-   int32_t m_iSndCurrSeqNo;                     // The largest sequence number that has been sent
+   volatile int32_t m_iSndLastDataAck;          // The real last ACK that updates the sender buffer and loss list
+   volatile int32_t m_iSndCurrSeqNo;            // The largest sequence number that has been sent
    int32_t m_iLastDecSeq;                       // Sequence number sent last decrease occurs
+   int32_t m_iSndLastAck2;                      // Last ACK2 sent back
+   uint64_t m_ullSndLastAck2Time;               // The time when last ACK2 was sent back
 
    int32_t m_iISN;                              // Initial Sequence Number
 
 private: // Receiving related data
    CRcvBuffer* m_pRcvBuffer;                    // Receiver buffer
    CRcvLossList* m_pRcvLossList;                // Receiver loss list
-   CIrregularPktList* m_pIrrPktList;            // Irregular sized packet list
    CACKWindow* m_pACKWindow;                    // ACK history window
    CPktTimeWindow* m_pRcvTimeWindow;            // Packet arrival time window
-
-   int m_iRTT;                                  // RTT
-   int m_iRTTVar;                               // RTT variance
 
    int32_t m_iRcvLastAck;                       // Last sent ACK
    uint64_t m_ullLastAckTime;                   // Timestamp of last ACK
    int32_t m_iRcvLastAckAck;                    // Last sent ACK that has been acknowledged
    int32_t m_iAckSeqNo;                         // Last ACK sequence number
    int32_t m_iRcvCurrSeqNo;                     // Largest received sequence number
-   int32_t m_iNextExpect;                       // Sequence number of next speculated packet to receive
-
-   volatile bool m_bReadBuf;                    // Application has called "recv" but has not finished
-   volatile char* m_pcTempData;                 // Pointer to the buffer that application want to put received data into
-   volatile int m_iTempLen;                     // Size of the "m_pcTempData"
-   volatile UDT_MEM_ROUTINE m_pTempRoutine;     // pointer to a routine function to process "m_pcTempData"
-   volatile void* m_pTempContext;		// context parameter for "m_pTempRoutine"
-
-   int32_t m_iUserBufBorder;                    // Sequence number of last packet that will fulfill a user buffer
 
    uint64_t m_ullLastWarningTime;               // Last time that a warning message is sent
 
    int32_t m_iPeerISN;                          // Initial Sequence Number of the peer side
 
-   int m_iFlowControlWindow;                    // flow control window size to be advertised
-
-private: // Overlapped IO related
-   int m_iSndHandle;                            // seed used to generate an overlapped sending handle
-   int m_iRcvHandle;                            // seed used to generate an overlapped receiving handle
-
 private: // synchronization: mutexes and conditions
    pthread_mutex_t m_ConnectionLock;            // used to synchronize connection operation
-
-   pthread_cond_t m_SendDataCond;               // used to block sending when there is no data
-   pthread_mutex_t m_SendDataLock;              // lock associated to m_SendDataCond
 
    pthread_cond_t m_SendBlockCond;              // used to block "send" call
    pthread_mutex_t m_SendBlockLock;             // lock associated to m_SendBlockCond
 
    pthread_mutex_t m_AckLock;                   // used to protected sender's loss list when processing ACK
 
-   pthread_cond_t m_WindowCond;                 // used to block sending when flow window is exceeded
-   pthread_mutex_t m_WindowLock;                // lock associated to m_WindowLock
-
    pthread_cond_t m_RecvDataCond;               // used to block "recv" when there is no data
    pthread_mutex_t m_RecvDataLock;              // lock associated to m_RecvDataCond
-
-   pthread_cond_t m_OverlappedRecvCond;         // used to block "recv" when overlapped receving is in progress
-   pthread_mutex_t m_OverlappedRecvLock;        // lock associated to m_OverlappedRecvCond
-
-   pthread_mutex_t m_HandleLock;                // used to generate unique send/recv handle
 
    pthread_mutex_t m_SendLock;                  // used to synchronize "send" call
    pthread_mutex_t m_RecvLock;                  // used to synchronize "recv" call
@@ -415,25 +381,15 @@ private: // synchronization: mutexes and conditions
    void destroySynch();
    void releaseSynch();
 
-private: // Thread handlers
-   #ifndef WIN32
-      static void* sndHandler(void* sender);
-      static void* rcvHandler(void* recver);
-   #else
-      static DWORD WINAPI sndHandler(LPVOID sender);
-      static DWORD WINAPI rcvHandler(LPVOID recver);
-   #endif
-
-private: // congestion control
-   void rateControl();
-   void flowControl(const int& recvrate);
-
-private: // Generation and processing of control packet
+private: // Generation and processing of packets
    void sendCtrl(const int& pkttype, void* lparam = NULL, void* rparam = NULL, const int& size = 0);
    void processCtrl(CPacket& ctrlpkt);
+   int packData(CPacket& packet, uint64_t& ts);
+   int processData(CUnit* unit);
+   int listen(sockaddr* addr, CPacket& packet);
 
 private: // Trace
-   timeval m_StartTime;                         // timestamp when the UDT entity is started
+   uint64_t m_StartTime;                        // timestamp when the UDT entity is started
    int64_t m_llSentTotal;                       // total number of sent data packets, including retransmissions
    int64_t m_llRecvTotal;                       // total number of received packets
    int m_iSndLossTotal;                         // total number of lost packets (sender side)
@@ -443,8 +399,9 @@ private: // Trace
    int m_iRecvACKTotal;                         // total number of received ACK packets
    int m_iSentNAKTotal;                         // total number of sent NAK packets
    int m_iRecvNAKTotal;                         // total number of received NAK packets
+   int64_t m_llSndDurationTotal;		// total real time for sending
 
-   timeval m_LastSampleTime;                    // last performance sample time
+   uint64_t m_LastSampleTime;                   // last performance sample time
    int64_t m_llTraceSent;                       // number of pakctes sent in the last trace interval
    int64_t m_llTraceRecv;                       // number of pakctes received in the last trace interval
    int m_iTraceSndLoss;                         // number of lost packets in the last trace interval (sender side)
@@ -454,9 +411,47 @@ private: // Trace
    int m_iRecvACK;                              // number of ACKs received in the last trace interval
    int m_iSentNAK;                              // number of NAKs sent in the last trace interval
    int m_iRecvNAK;                              // number of NAKs received in the last trace interval
+   int64_t m_llSndDuration;			// real time for sending
+   int64_t m_llSndDurationCounter;		// timers to record the sending duration
 
-private: // internal data
-   char* m_pcTmpBuf;
+private: // Timers
+   uint64_t m_ullCPUFrequency;                  // CPU clock frequency, used for Timer, ticks per microsecond
+
+   static const int m_iSYNInterval;             // Periodical Rate Control Interval, 10000 microsecond
+   static const int m_iSelfClockInterval;       // ACK interval for self-clocking
+
+   uint64_t m_ullNextACKTime;			// Next ACK time, in CPU clock cycles, same below
+   uint64_t m_ullNextNAKTime;			// Next NAK time
+   uint64_t m_ullNextEXPTime;			// Next timeout
+
+   volatile uint64_t m_ullSYNInt;		// SYN interval
+   volatile uint64_t m_ullACKInt;		// ACK interval
+   volatile uint64_t m_ullNAKInt;		// NAK interval
+   volatile uint64_t m_ullEXPInt;		// EXP interval
+   volatile int64_t m_llLastRspTime;		// time stamp of last response from the peer
+
+   uint64_t m_ullMinNakInt;			// NAK timeout lower bound; too small value can cause unnecessary retransmission
+   uint64_t m_ullMinExpInt;			// timeout lower bound threshold: too small timeout can cause problem
+
+   int m_iPktCount;				// packet counter for ACK
+   int m_iLightACKCount;			// light ACK counter
+
+   uint64_t m_ullTargetTime;			// scheduled time of next packet sending
+
+   void checkTimers();
+
+private: // for UDP multiplexer
+   CSndQueue* m_pSndQueue;			// packet sending queue
+   CRcvQueue* m_pRcvQueue;			// packet receiving queue
+   sockaddr* m_pPeerAddr;			// peer address
+   uint32_t m_piSelfIP[4];			// local UDP IP address
+   CSNode* m_pSNode;				// node information for UDT list used in snd queue
+   CRNode* m_pRNode;                            // node information for UDT list used in rcv queue
+
+private: // for epoll
+   std::set<int> m_sPollID;                     // set of epoll ID to trigger
+   void addEPoll(const int eid);
+   void removeEPoll(const int eid);
 };
 
 

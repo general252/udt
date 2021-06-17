@@ -1,44 +1,41 @@
 /*****************************************************************************
-Copyright © 2001 - 2006, The Board of Trustees of the University of Illinois.
-All Rights Reserved.
+Copyright (c) 2001 - 2011, The Board of Trustees of the University of Illinois.
+All rights reserved.
 
-UDP-based Data Transfer Library (UDT) version 3
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
 
-Laboratory for Advanced Computing (LAC)
-National Center for Data Mining (NCDM)
-University of Illinois at Chicago
-http://www.lac.uic.edu/
+* Redistributions of source code must retain the above
+  copyright notice, this list of conditions and the
+  following disclaimer.
 
-This library is free software; you can redistribute it and/or modify it
-under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or (at
-your option) any later version.
+* Redistributions in binary form must reproduce the
+  above copyright notice, this list of conditions
+  and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
 
-This library is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser
-General Public License for more details.
+* Neither the name of the University of Illinois
+  nor the names of its contributors may be used to
+  endorse or promote products derived from this
+  software without specific prior written permission.
 
-You should have received a copy of the GNU Lesser General Public License
-along with this library; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ****************************************************************************/
-
-/*****************************************************************************
-This file contains the implementation of UDT packet sending and receiving
-routines.
-
-UDT uses UDP for packet transfer. Data gathering/scattering is used in
-both sending and receiving.
-
-reference:
-socket programming reference, writev/readv
-UDT packet definition: packet.h
-*****************************************************************************/
 
 /****************************************************************************
 written by
-   Yunhong Gu [gu@lac.uic.edu], last updated 06/27/2006
+   Yunhong Gu, last updated 01/27/2011
 *****************************************************************************/
 
 #ifndef WIN32
@@ -52,10 +49,12 @@ written by
 #else
    #include <winsock2.h>
    #include <ws2tcpip.h>
+   #ifdef LEGACY_WIN32
+      #include <wspiapi.h>
+   #endif
 #endif
 #include "channel.h"
 #include "packet.h"
-
 
 #ifdef WIN32
    #define socklen_t int
@@ -70,25 +69,24 @@ written by
 
 CChannel::CChannel():
 m_iIPversion(AF_INET),
+m_iSockAddrSize(sizeof(sockaddr_in)),
+m_iSocket(),
 m_iSndBufSize(65536),
-m_iRcvBufSize(65536),
-m_pcChannelBuf(NULL)
+m_iRcvBufSize(65536)
 {
-   m_pcChannelBuf = new char [9000];
 }
 
 CChannel::CChannel(const int& version):
 m_iIPversion(version),
+m_iSocket(),
 m_iSndBufSize(65536),
-m_iRcvBufSize(65536),
-m_pcChannelBuf(NULL)
+m_iRcvBufSize(65536)
 {
-   m_pcChannelBuf = new char [9000];
+   m_iSockAddrSize = (AF_INET == m_iIPversion) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
 }
 
 CChannel::~CChannel()
 {
-   delete [] m_pcChannelBuf;
 }
 
 void CChannel::open(const sockaddr* addr)
@@ -96,205 +94,100 @@ void CChannel::open(const sockaddr* addr)
    // construct an socket
    m_iSocket = socket(m_iIPversion, SOCK_DGRAM, 0);
 
-   if (m_iSocket < 0)
+   #ifdef WIN32
+      if (INVALID_SOCKET == m_iSocket)
+   #else
+      if (m_iSocket < 0)
+   #endif
       throw CUDTException(1, 0, NET_ERROR);
 
    if (NULL != addr)
    {
-      socklen_t namelen = (AF_INET == m_iIPversion) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
+      socklen_t namelen = m_iSockAddrSize;
 
       if (0 != bind(m_iSocket, addr, namelen))
          throw CUDTException(1, 3, NET_ERROR);
    }
+   else
+   {
+      //sendto or WSASendTo will also automatically bind the socket
+      addrinfo hints;
+      addrinfo* res;
 
-   try
-   {
-      setChannelOpt();
+      memset(&hints, 0, sizeof(struct addrinfo));
+
+      hints.ai_flags = AI_PASSIVE;
+      hints.ai_family = m_iIPversion;
+      hints.ai_socktype = SOCK_DGRAM;
+
+      if (0 != getaddrinfo(NULL, "0", &hints, &res))
+         throw CUDTException(1, 3, NET_ERROR);
+
+      if (0 != bind(m_iSocket, res->ai_addr, res->ai_addrlen))
+         throw CUDTException(1, 3, NET_ERROR);
+
+      freeaddrinfo(res);
    }
-   catch (CUDTException e)
-   {
-      throw e;
-   }
+
+   setUDPSockOpt();
 }
 
-void CChannel::disconnect() const
+void CChannel::open(UDPSOCKET udpsock)
+{
+   m_iSocket = udpsock;
+   setUDPSockOpt();
+}
+
+void CChannel::setUDPSockOpt()
+{
+   #if defined(BSD) || defined(OSX)
+      // BSD system will fail setsockopt if the requested buffer size exceeds system maximum value
+      int maxsize = 64000;
+      if (0 != setsockopt(m_iSocket, SOL_SOCKET, SO_RCVBUF, (char*)&m_iRcvBufSize, sizeof(int)))
+         setsockopt(m_iSocket, SOL_SOCKET, SO_RCVBUF, (char*)&maxsize, sizeof(int));
+      if (0 != setsockopt(m_iSocket, SOL_SOCKET, SO_SNDBUF, (char*)&m_iSndBufSize, sizeof(int)))
+         setsockopt(m_iSocket, SOL_SOCKET, SO_SNDBUF, (char*)&maxsize, sizeof(int));
+   #else
+      // for other systems, if requested is greated than maximum, the maximum value will be automactally used
+      if ((0 != setsockopt(m_iSocket, SOL_SOCKET, SO_RCVBUF, (char*)&m_iRcvBufSize, sizeof(int))) ||
+          (0 != setsockopt(m_iSocket, SOL_SOCKET, SO_SNDBUF, (char*)&m_iSndBufSize, sizeof(int))))
+         throw CUDTException(1, 3, NET_ERROR);
+   #endif
+
+   timeval tv;
+   tv.tv_sec = 0;
+   #if defined (BSD) || defined (OSX)
+      // Known BSD bug as the day I wrote this code.
+      // A small time out value will cause the socket to block forever.
+      tv.tv_usec = 10000;
+   #else
+      tv.tv_usec = 100;
+   #endif
+
+   #ifdef UNIX
+      // Set non-blocking I/O
+      // UNIX does not support SO_RCVTIMEO
+      int opts = fcntl(m_iSocket, F_GETFL);
+      if (-1 == fcntl(m_iSocket, F_SETFL, opts | O_NONBLOCK))
+         throw CUDTException(1, 3, NET_ERROR);
+   #elif WIN32
+      DWORD ot = 1; //milliseconds
+      if (0 != setsockopt(m_iSocket, SOL_SOCKET, SO_RCVTIMEO, (char *)&ot, sizeof(DWORD)))
+         throw CUDTException(1, 3, NET_ERROR);
+   #else
+      // Set receiving time-out value
+      if (0 != setsockopt(m_iSocket, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(timeval)))
+         throw CUDTException(1, 3, NET_ERROR);
+   #endif
+}
+
+void CChannel::close() const
 {
    #ifndef WIN32
-      close(m_iSocket);
+      ::close(m_iSocket);
    #else
       closesocket(m_iSocket);
    #endif
-}
-
-void CChannel::connect(const sockaddr* addr)
-{
-   const int addrlen = (AF_INET == m_iIPversion) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
-
-   if (0 != ::connect(m_iSocket, addr, addrlen))
-      throw CUDTException(1, 4, NET_ERROR);
-}
-
-int CChannel::send(char* buffer, const int& size) const
-{
-   return ::send(m_iSocket, buffer, size, 0);
-}
-
-int CChannel::recv(char* buffer, const int& size) const
-{
-   return ::recv(m_iSocket, buffer, size, 0);
-}
-
-int CChannel::peek(char* buffer, const int& size) const
-{
-   return ::recv(m_iSocket, buffer, size, MSG_PEEK);
-}
-
-const CChannel& CChannel::operator<<(CPacket& packet) const
-{
-   // convert control information into network order
-   if (packet.getFlag())
-      for (int i = 0, n = packet.getLength() / 4; i < n; ++ i)
-         *((uint32_t *)packet.m_pcData + i) = htonl(*((uint32_t *)packet.m_pcData + i));
-
-   // convert packet header into network order
-   packet.m_nHeader[0] = htonl(packet.m_nHeader[0]);
-   packet.m_nHeader[1] = htonl(packet.m_nHeader[1]);
-
-   #ifdef UNIX
-      while (0 == writev(m_iSocket, packet.getPacketVector(), 2)) {}
-   #else
-      writev(m_iSocket, packet.getPacketVector(), 2);
-   #endif
-
-   // convert back into local host order
-   packet.m_nHeader[0] = ntohl(packet.m_nHeader[0]);
-   packet.m_nHeader[1] = ntohl(packet.m_nHeader[1]);
-
-   if (packet.getFlag())
-      for (int j = 0, n = packet.getLength() / 4; j < n; ++ j)
-         *((uint32_t *)packet.m_pcData + j) = ntohl(*((uint32_t *)packet.m_pcData + j));
-
-   return *this;
-}
-
-const CChannel& CChannel::operator>>(CPacket& packet) const
-{
-   // Packet length indicates if the packet is successfully received
-   packet.setLength(readv(m_iSocket, packet.getPacketVector(), 2) - CPacket::m_iPktHdrSize);
-
-   #ifdef UNIX
-      //simulating RCV_TIMEO
-      if (packet.getLength() <= 0)
-      {
-         usleep(10);
-         packet.setLength(readv(m_iSocket, packet.getPacketVector(), 2) - CPacket::m_iPktHdrSize);
-      }
-   #endif
-
-   if (packet.getLength() <= 0)
-      return *this;
-
-   // convert packet header into local host order
-   packet.m_nHeader[0] = ntohl(packet.m_nHeader[0]);
-   packet.m_nHeader[1] = ntohl(packet.m_nHeader[1]);
-
-   // convert control information into local host order
-   if (packet.getFlag())
-      for (int i = 0, n = packet.getLength() / 4; i < n; ++ i)
-         *((uint32_t *)packet.m_pcData + i) = ntohl(*((uint32_t *)packet.m_pcData + i));
-
-   return *this;
-}
-
-int CChannel::sendto(CPacket& packet, const sockaddr* addr) const
-{
-   // convert control information into network order
-   if (packet.getFlag())
-      for (int i = 0, n = packet.getLength() / 4; i < n; ++ i)
-         *((uint32_t *)packet.m_pcData + i) = htonl(*((uint32_t *)packet.m_pcData + i));
-
-   // convert packet header into network order
-   packet.m_nHeader[0] = htonl(packet.m_nHeader[0]);
-   packet.m_nHeader[1] = htonl(packet.m_nHeader[1]);
-
-   char* buf;
-   if (CPacket::m_iPktHdrSize + packet.getLength() <= 9000)
-      buf = m_pcChannelBuf;
-   else
-      buf = new char [CPacket::m_iPktHdrSize + packet.getLength()];
-
-   memcpy(buf, packet.getPacketVector()[0].iov_base, CPacket::m_iPktHdrSize);
-   memcpy(buf + CPacket::m_iPktHdrSize, packet.getPacketVector()[1].iov_base, packet.getLength());
-
-   socklen_t addrsize = (AF_INET == m_iIPversion) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
-
-   int ret = ::sendto(m_iSocket, buf, CPacket::m_iPktHdrSize + packet.getLength(), 0, addr, addrsize);
-
-   #ifdef UNIX
-      while (ret <= 0)
-         ret = ::sendto(m_iSocket, buf, CPacket::m_iPktHdrSize + packet.getLength(), 0, addr, addrsize);
-   #endif
-
-   if (CPacket::m_iPktHdrSize + packet.getLength() > 9000)
-      delete [] buf;
-
-   // convert back into local host order
-   packet.m_nHeader[0] = ntohl(packet.m_nHeader[0]);
-   packet.m_nHeader[1] = ntohl(packet.m_nHeader[1]);
-
-   if (packet.getFlag())
-      for (int j = 0, n = packet.getLength() / 4; j < n; ++ j)
-         *((uint32_t *)packet.m_pcData + j) = ntohl(*((uint32_t *)packet.m_pcData + j));
-
-   return ret;
-}
-
-int CChannel::recvfrom(CPacket& packet, sockaddr* addr) const
-{
-   char* buf;
-   if (CPacket::m_iPktHdrSize + packet.getLength() <= 9000)
-      buf = m_pcChannelBuf;
-   else
-      buf = new char [CPacket::m_iPktHdrSize + packet.getLength()];
-
-   socklen_t addrsize = (AF_INET == m_iIPversion) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
-
-   int ret = ::recvfrom(m_iSocket, buf, CPacket::m_iPktHdrSize + packet.getLength(), 0, addr, &addrsize);
-
-   #ifdef UNIX
-      //simulating RCV_TIMEO
-      if (ret <= 0)
-      {
-         usleep(10);
-         ret = ::recvfrom(m_iSocket, buf, CPacket::m_iPktHdrSize + packet.getLength(), 0, addr, &addrsize);
-      }
-   #endif
-
-   if (ret > CPacket::m_iPktHdrSize)
-   {
-      packet.setLength(ret - CPacket::m_iPktHdrSize);
-      memcpy(packet.getPacketVector()[0].iov_base, buf, CPacket::m_iPktHdrSize);
-      memcpy(packet.getPacketVector()[1].iov_base, buf + CPacket::m_iPktHdrSize, ret - CPacket::m_iPktHdrSize);
-
-      // convert back into local host order
-      packet.m_nHeader[0] = ntohl(packet.m_nHeader[0]);
-      packet.m_nHeader[1] = ntohl(packet.m_nHeader[1]);
-
-      if (packet.getFlag())
-         for (int i = 0, n = packet.getLength() / 4; i < n; ++ i)
-            *((uint32_t *)packet.m_pcData + i) = ntohl(*((uint32_t *)packet.m_pcData + i));
-   }
-   else
-   {
-      if (ret > 0)
-         ret = 0;
-      packet.setLength(ret);
-   }
-
-   if (CPacket::m_iPktHdrSize + packet.getLength() > 9000)
-      delete [] buf;
-
-   return ret;
 }
 
 int CChannel::getSndBufSize()
@@ -327,48 +220,127 @@ void CChannel::setRcvBufSize(const int& size)
 
 void CChannel::getSockAddr(sockaddr* addr) const
 {
-   socklen_t namelen = (AF_INET == m_iIPversion) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
+   socklen_t namelen = m_iSockAddrSize;
 
    getsockname(m_iSocket, addr, &namelen);
 }
 
 void CChannel::getPeerAddr(sockaddr* addr) const
 {
-   socklen_t namelen = (AF_INET == m_iIPversion) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
+   socklen_t namelen = m_iSockAddrSize;
 
    getpeername(m_iSocket, addr, &namelen);
 }
 
-void CChannel::setChannelOpt()
+int CChannel::sendto(const sockaddr* addr, CPacket& packet) const
 {
-   // set sending and receiving buffer size
-   if ((0 != setsockopt(m_iSocket, SOL_SOCKET, SO_RCVBUF, (char *)&m_iRcvBufSize, sizeof(int))) ||
-       (0 != setsockopt(m_iSocket, SOL_SOCKET, SO_SNDBUF, (char *)&m_iSndBufSize, sizeof(int))))
-      throw CUDTException(1, 3, NET_ERROR);
+   // convert control information into network order
+   if (packet.getFlag())
+      for (int i = 0, n = packet.getLength() / 4; i < n; ++ i)
+         *((uint32_t *)packet.m_pcData + i) = htonl(*((uint32_t *)packet.m_pcData + i));
 
-   timeval tv;
-   tv.tv_sec = 0;
-   #if defined (BSD) || defined (OSX)
-      // Known BSD bug as the day I wrote these codes.
-      // A small time out value will cause the socket to block forever.
-      tv.tv_usec = 10000;
+   // convert packet header into network order
+   //for (int j = 0; j < 4; ++ j)
+   //   packet.m_nHeader[j] = htonl(packet.m_nHeader[j]);
+   uint32_t* p = packet.m_nHeader;
+   for (int j = 0; j < 4; ++ j)
+   {
+      *p = htonl(*p);
+      ++ p;
+   }
+
+   #ifndef WIN32
+      msghdr mh;
+      mh.msg_name = (sockaddr*)addr;
+      mh.msg_namelen = m_iSockAddrSize;
+      mh.msg_iov = (iovec*)packet.m_PacketVector;
+      mh.msg_iovlen = 2;
+      mh.msg_control = NULL;
+      mh.msg_controllen = 0;
+      mh.msg_flags = 0;
+
+      int res = sendmsg(m_iSocket, &mh, 0);
    #else
-      tv.tv_usec = 100;
+      DWORD size = CPacket::m_iPktHdrSize + packet.getLength();
+      int addrsize = m_iSockAddrSize;
+      int res = WSASendTo(m_iSocket, (LPWSABUF)packet.m_PacketVector, 2, &size, 0, addr, addrsize, NULL, NULL);
+      res = (0 == res) ? size : -1;
    #endif
 
-   #ifdef UNIX
-      // Set non-blocking I/O
-      // UNIX does not support SO_RCVTIMEO
-      int opts = fcntl(m_iSocket, F_GETFL);
-      if (-1 == fcntl(m_iSocket, F_SETFL, opts | O_NONBLOCK))
-         throw CUDTException(1, 3, NET_ERROR);
-   #elif WIN32
-      DWORD ot = 1; //milliseconds
-      if (setsockopt(m_iSocket, SOL_SOCKET, SO_RCVTIMEO, (char *)&ot, sizeof(DWORD)) < 0)
-         throw CUDTException(1, 3, NET_ERROR);
+   // convert back into local host order
+   //for (int k = 0; k < 4; ++ k)
+   //   packet.m_nHeader[k] = ntohl(packet.m_nHeader[k]);
+   p = packet.m_nHeader;
+   for (int k = 0; k < 4; ++ k)
+   {
+      *p = ntohl(*p);
+       ++ p;
+   }
+
+   if (packet.getFlag())
+   {
+      for (int l = 0, n = packet.getLength() / 4; l < n; ++ l)
+         *((uint32_t *)packet.m_pcData + l) = ntohl(*((uint32_t *)packet.m_pcData + l));
+   }
+
+   return res;
+}
+
+int CChannel::recvfrom(sockaddr* addr, CPacket& packet) const
+{
+   #ifndef WIN32
+      msghdr mh;   
+      mh.msg_name = addr;
+      mh.msg_namelen = m_iSockAddrSize;
+      mh.msg_iov = packet.m_PacketVector;
+      mh.msg_iovlen = 2;
+      mh.msg_control = NULL;
+      mh.msg_controllen = 0;
+      mh.msg_flags = 0;
+
+      #ifdef UNIX
+         fd_set set;
+         timeval tv;
+         FD_ZERO(&set);
+         FD_SET(m_iSocket, &set);
+         tv.tv_sec = 0;
+         tv.tv_usec = 10000;
+         select(m_iSocket+1, &set, NULL, &set, &tv);
+      #endif
+
+      int res = recvmsg(m_iSocket, &mh, 0);
    #else
-      // Set receiving time-out value
-      if (setsockopt(m_iSocket, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(timeval)) < 0)
-         throw CUDTException(1, 3, NET_ERROR);
+      DWORD size = CPacket::m_iPktHdrSize + packet.getLength();
+      DWORD flag = 0;
+      int addrsize = m_iSockAddrSize;
+
+      int res = WSARecvFrom(m_iSocket, (LPWSABUF)packet.m_PacketVector, 2, &size, &flag, addr, &addrsize, NULL, NULL);
+      res = (0 == res) ? size : -1;
    #endif
+
+   if (res <= 0)
+   {
+      packet.setLength(-1);
+      return -1;
+   }
+
+   packet.setLength(res - CPacket::m_iPktHdrSize);
+
+   // convert back into local host order
+   //for (int i = 0; i < 4; ++ i)
+   //   packet.m_nHeader[i] = ntohl(packet.m_nHeader[i]);
+   uint32_t* p = packet.m_nHeader;
+   for (int i = 0; i < 4; ++ i)
+   {
+      *p = ntohl(*p);
+      ++ p;
+   }
+
+   if (packet.getFlag())
+   {
+      for (int j = 0, n = packet.getLength() / 4; j < n; ++ j)
+         *((uint32_t *)packet.m_pcData + j) = ntohl(*((uint32_t *)packet.m_pcData + j));
+   }
+
+   return packet.getLength();
 }

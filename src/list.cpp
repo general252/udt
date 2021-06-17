@@ -1,49 +1,54 @@
 /*****************************************************************************
-Copyright © 2001 - 2006, The Board of Trustees of the University of Illinois.
-All Rights Reserved.
+Copyright (c) 2001 - 2011, The Board of Trustees of the University of Illinois.
+All rights reserved.
 
-UDP-based Data Transfer Library (UDT) version 3
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
 
-Laboratory for Advanced Computing (LAC)
-National Center for Data Mining (NCDM)
-University of Illinois at Chicago
-http://www.lac.uic.edu/
+* Redistributions of source code must retain the above
+  copyright notice, this list of conditions and the
+  following disclaimer.
 
-This library is free software; you can redistribute it and/or modify it
-under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or (at
-your option) any later version.
+* Redistributions in binary form must reproduce the
+  above copyright notice, this list of conditions
+  and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
 
-This library is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser
-General Public License for more details.
+* Neither the name of the University of Illinois
+  nor the names of its contributors may be used to
+  endorse or promote products derived from this
+  software without specific prior written permission.
 
-You should have received a copy of the GNU Lesser General Public License
-along with this library; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
-*****************************************************************************/
-
-/*****************************************************************************
-This file contains the implementation of UDT loss lists and irregular packet
-list management modules.
-
-All the lists are static linked lists in ascending order of sequence numbers.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *****************************************************************************/
 
 /*****************************************************************************
 written by
-   Yunhong Gu [gu@lac.uic.edu], last updated 03/23/2006
+   Yunhong Gu, last updated 01/22/2011
 *****************************************************************************/
 
 #include "list.h"
-
 
 CSndLossList::CSndLossList(const int& size):
 m_piData1(NULL),
 m_piData2(NULL),
 m_piNext(NULL),
-m_iSize(size)
+m_iHead(-1),
+m_iLength(0),
+m_iSize(size),
+m_iLastInsertPos(-1),
+m_ListLock()
 {
    m_piData1 = new int32_t [m_iSize];
    m_piData2 = new int32_t [m_iSize];
@@ -55,10 +60,6 @@ m_iSize(size)
       m_piData1[i] = -1;
       m_piData2[i] = -1;
    }
-
-   m_iLength = 0;
-   m_iHead = -1;
-   m_iLastInsertPos = -1;
 
    // sender list needs mutex protection
    #ifndef WIN32
@@ -317,7 +318,7 @@ void CSndLossList::remove(const int32_t& seqno)
       }
       else
       {
-         // targe node is empty, check prior node
+         // target node is empty, check prior node
          int i = m_iHead;
          while ((-1 != m_piNext[i]) && (CSeqNo::seqcmp(m_piData1[m_piNext[i]], seqno) < 0))
             i = m_piNext[i];
@@ -421,16 +422,15 @@ int32_t CSndLossList::getLostSeq()
 CRcvLossList::CRcvLossList(const int& size):
 m_piData1(NULL),
 m_piData2(NULL),
-m_pLastFeedbackTime(NULL),
-m_piCount(NULL),
 m_piNext(NULL),
 m_piPrior(NULL),
+m_iHead(-1),
+m_iTail(-1),
+m_iLength(0),
 m_iSize(size)
 {
    m_piData1 = new int32_t [m_iSize];
    m_piData2 = new int32_t [m_iSize];
-   m_pLastFeedbackTime = new timeval [m_iSize];
-   m_piCount = new int [m_iSize];
    m_piNext = new int [m_iSize];
    m_piPrior = new int [m_iSize];
 
@@ -440,18 +440,12 @@ m_iSize(size)
       m_piData1[i] = -1;
       m_piData2[i] = -1;
    }
-
-   m_iLength = 0;
-   m_iHead = -1;
-   m_iTail = -1;
 }
 
 CRcvLossList::~CRcvLossList()
 {
    delete [] m_piData1;
    delete [] m_piData2;
-   delete [] m_pLastFeedbackTime;
-   delete [] m_piCount;
    delete [] m_piNext;
    delete [] m_piPrior;
 }
@@ -469,9 +463,6 @@ void CRcvLossList::insert(const int32_t& seqno1, const int32_t& seqno2)
       m_piData1[m_iHead] = seqno1;
       if (seqno2 != seqno1)
          m_piData2[m_iHead] = seqno2;
-
-      gettimeofday(m_pLastFeedbackTime + m_iHead, 0);
-      m_piCount[m_iHead] = 2;
 
       m_piNext[m_iHead] = -1;
       m_piPrior[m_iHead] = -1;
@@ -503,10 +494,6 @@ void CRcvLossList::insert(const int32_t& seqno1, const int32_t& seqno2)
       m_piNext[loc] = -1;
       m_iTail = loc;
    }
-
-   // Initilize time stamp
-   gettimeofday(m_pLastFeedbackTime + loc, 0);
-   m_piCount[loc] = 2;
 
    m_iLength += CSeqNo::seqlen(seqno1, seqno2);
 }
@@ -561,10 +548,6 @@ bool CRcvLossList::remove(const int32_t& seqno)
          // process the sequence end
          if (CSeqNo::seqcmp(m_piData2[loc], CSeqNo::incseq(m_piData1[loc])) > 0)
             m_piData2[i] = m_piData2[loc];
-
-         // replicate the time stamp and report counter
-         m_pLastFeedbackTime[i] = m_pLastFeedbackTime[loc];
-         m_piCount[i] = m_piCount[loc];
 
          // remove the current node
          m_piData1[loc] = -1;
@@ -628,10 +611,6 @@ bool CRcvLossList::remove(const int32_t& seqno)
          m_piData2[i] = -1;
       else
          m_piData2[i] = CSeqNo::decseq(seqno);
-
-      // replicate the time stamp and report counter
-      m_pLastFeedbackTime[loc] = m_pLastFeedbackTime[i];
-      m_piCount[loc] = m_piCount[i];
 
       // update the list pointer
       m_piNext[loc] = m_piNext[i];
@@ -700,160 +679,25 @@ int CRcvLossList::getFirstLostSeq() const
    return m_piData1[m_iHead];
 }
 
-void CRcvLossList::getLossArray(int32_t* array, int& len, const int& limit, const int& threshold)
+void CRcvLossList::getLossArray(int32_t* array, int& len, const int& limit)
 {
-   timeval currtime;
-   gettimeofday(&currtime, 0);
-
-   int i  = m_iHead;
-
    len = 0;
+
+   int i = m_iHead;
 
    while ((len < limit - 1) && (-1 != i))
    {
-      if ((currtime.tv_sec - m_pLastFeedbackTime[i].tv_sec) * 1000000 + currtime.tv_usec - m_pLastFeedbackTime[i].tv_usec > m_piCount[i] * threshold)
+      array[len] = m_piData1[i];
+      if (-1 != m_piData2[i])
       {
-         array[len] = m_piData1[i];
-         if (-1 != m_piData2[i])
-         {
-            // there are more than 1 loss in the sequence
-            array[len] |= 0x80000000;
-            ++ len;
-            array[len] = m_piData2[i];
-         }
-
+         // there are more than 1 loss in the sequence
+         array[len] |= 0x80000000;
          ++ len;
-
-         // update the timestamp
-         gettimeofday(m_pLastFeedbackTime + i, 0);
-         // update how many times this loss has been fed back, the "k" in UDT paper
-         ++ m_piCount[i];
+         array[len] = m_piData2[i];
       }
 
-      i = m_piNext[i];
-   }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-CIrregularPktList::CIrregularPktList(const int& size):
-m_piData(NULL),
-m_piErrorSize(NULL),
-m_piNext(NULL),
-m_iSize(size)
-{
-   m_piData = new int32_t [m_iSize];
-   m_piErrorSize = new int [m_iSize];
-   m_piNext = new int [m_iSize];
-
-   // -1 means there is no data in the node
-   for (int i = 0; i < size; ++ i)
-      m_piData[i] = -1;
-
-   m_iLength = 0;
-   m_iHead = -1;
-   m_iInsertPos = -1;
-}
-
-CIrregularPktList::~CIrregularPktList()
-{
-   delete [] m_piData;
-   delete [] m_piErrorSize;
-   delete [] m_piNext;
-}
-
-int CIrregularPktList::currErrorSize(const int32_t& seqno) const
-{
-   if (0 == m_iLength)
-      return 0;
-
-   int size = 0;
-   int i = m_iHead;
-
-   // calculate the sum of the size error until the node with a seq. no. not less than "seqno"
-   while ((-1 != i) && (CSeqNo::seqcmp(m_piData[i], seqno) < 0))
-   {
-      size += m_piErrorSize[i];
-      i = m_piNext[i];
-   }
-
-   return size;
-}
-
-void CIrregularPktList::addIrregularPkt(const int32_t& seqno, const int& errsize)
-{
-   if (0 == m_iLength)
-   {
-      // insert into an empty list
-
-      m_iHead = 0;
-      m_piData[m_iHead] = seqno;
-      m_piErrorSize[m_iHead] = errsize;
-      m_piNext[m_iHead] = -1;
-      ++ m_iLength;
-      m_iInsertPos = m_iHead;
-
-      return;
-   }
-
-   // positioning...
-   int offset = CSeqNo::seqoff(m_piData[m_iHead], seqno);
-   int loc = (m_iHead + offset + m_iSize) % m_iSize;
-
-   if (offset < 0)
-   {
-      // insert at head
-
-      m_piData[loc] = seqno;
-      m_piErrorSize[loc] = errsize;
-      m_piNext[loc] = m_iHead;
-      m_iHead = loc;
-      ++ m_iLength;
-   }
-   else if (offset > 0)
-   {
-      // return if it is already there
-      if (seqno == m_piData[loc])
-         return;
-
-      // locate previous node
-      int i;
-
-      if ((-1 != m_iInsertPos) && (CSeqNo::seqcmp(m_piData[m_iInsertPos], seqno) < 0))
-         i = m_iInsertPos;
-      else
-         i = m_iHead;
-
-      while ((-1 != m_piNext[i]) && (CSeqNo::seqcmp(m_piData[m_piNext[i]], seqno) < 0))
-         i = m_piNext[i];
-
-      // insert the node
-      m_piNext[loc] = m_piNext[i];
-      m_piNext[i] = loc;
-
-      m_piData[loc] = seqno;
-      m_piErrorSize[loc] = errsize;
-      ++ m_iLength;
-   }
-
-   m_iInsertPos = loc;
-}
-
-void CIrregularPktList::deleteIrregularPkt(const int32_t& seqno)
-{
-   // remove all node until the one with seq. no. larger than the parameter
-
-   int i = m_iHead;
-   while ((-1 != i) && (CSeqNo::seqcmp(m_piData[i], seqno) <= 0))
-   {
-      m_piData[i] = -1;
-      m_iLength --;
-
-      if (i == m_iInsertPos)
-         m_iInsertPos = -1;
+      ++ len;
 
       i = m_piNext[i];
    }
-
-   m_iHead = i;
 }

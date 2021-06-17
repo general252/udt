@@ -1,36 +1,41 @@
 /*****************************************************************************
-Copyright © 2001 - 2006, The Board of Trustees of the University of Illinois.
-All Rights Reserved.
+Copyright (c) 2001 - 2011, The Board of Trustees of the University of Illinois.
+All rights reserved.
 
-UDP-based Data Transfer Library (UDT) version 3
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
 
-Laboratory for Advanced Computing (LAC)
-National Center for Data Mining (NCDM)
-University of Illinois at Chicago
-http://www.lac.uic.edu/
+* Redistributions of source code must retain the above
+  copyright notice, this list of conditions and the
+  following disclaimer.
 
-This library is free software; you can redistribute it and/or modify it
-under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or (at
-your option) any later version.
+* Redistributions in binary form must reproduce the
+  above copyright notice, this list of conditions
+  and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
 
-This library is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser
-General Public License for more details.
+* Neither the name of the University of Illinois
+  nor the names of its contributors may be used to
+  endorse or promote products derived from this
+  software without specific prior written permission.
 
-You should have received a copy of the GNU Lesser General Public License
-along with this library; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
-*****************************************************************************/
-
-/*****************************************************************************
-This header file contains the definition of Window structures used in UDT.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *****************************************************************************/
 
 /*****************************************************************************
 written by
-   Yunhong Gu [gu@lac.uic.edu], last updated 03/23/2006
+   Yunhong Gu, last updated 01/22/2011
 *****************************************************************************/
 
 #ifndef __UDT_WINDOW_H__
@@ -47,8 +52,7 @@ written by
 class CACKWindow
 {
 public:
-   CACKWindow();
-   CACKWindow(const int& size);
+   CACKWindow(const int& size = 1024);
    ~CACKWindow();
 
       // Functionality:
@@ -74,11 +78,15 @@ public:
 private:
    int32_t* m_piACKSeqNo;       // Seq. No. for the ACK packet
    int32_t* m_piACK;            // Data Seq. No. carried by the ACK packet
-   timeval* m_pTimeStamp;       // The timestamp when the ACK was sent
+   uint64_t* m_pTimeStamp;      // The timestamp when the ACK was sent
 
    int m_iSize;                 // Size of the ACK history window
    int m_iHead;                 // Pointer to the lastest ACK record
    int m_iTail;                 // Pointer to the oldest ACK record
+
+private:
+   CACKWindow(const CACKWindow&);
+   CACKWindow& operator=(const CACKWindow&);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -86,8 +94,7 @@ private:
 class CPktTimeWindow
 {
 public:
-   CPktTimeWindow();
-   CPktTimeWindow(const int& s1, const int& s2, const int& s3);
+   CPktTimeWindow(const int& asize = 16, const int& psize = 16);
    ~CPktTimeWindow();
 
       // Functionality:
@@ -107,15 +114,6 @@ public:
       //    Packet arrival speed (packets per second).
 
    int getPktRcvSpeed() const;
-
-      // Functionality:
-      //    Check if the rtt is increasing or not.
-      // Parameters:
-      //    None.
-      // Returned value:
-      //    true is RTT is increasing, otherwise false.
-
-   bool getDelayTrend() const;
 
       // Functionality:
       //    Estimate the bandwidth.
@@ -145,15 +143,6 @@ public:
    void onPktArrival();
 
       // Functionality:
-      //    Record the recent RTT.
-      // Parameters:
-      //    0) [in] rtt: the mose recent RTT from ACK-2.
-      // Returned value:
-      //    None.
-
-   void ack2Arrival(const int& rtt);
-
-      // Functionality:
       //    Record the arrival time of the first probing packet.
       // Parameters:
       //    None.
@@ -174,24 +163,24 @@ public:
 private:
    int m_iAWSize;               // size of the packet arrival history window
    int* m_piPktWindow;          // packet information window
+   int* m_piPktReplica;
    int m_iPktWindowPtr;         // position pointer of the packet info. window.
-
-   int m_iRWSize;               // size of RTT history window size
-   int* m_piRTTWindow;          // RTT history window
-   int* m_piPCTWindow;          // PCT (pairwise comparison test) history window
-   int* m_piPDTWindow;          // PDT (pairwise difference test) history window
-   int m_iRTTWindowPtr;         // position pointer to the 3 windows above
 
    int m_iPWSize;               // size of probe history window size
    int* m_piProbeWindow;        // record inter-packet time for probing packet pairs
+   int* m_piProbeReplica;
    int m_iProbeWindowPtr;       // position pointer to the probing window
 
    int m_iLastSentTime;         // last packet sending time
    int m_iMinPktSndInt;         // Minimum packet sending interval
 
-   timeval m_LastArrTime;       // last packet arrival time
-   timeval m_CurrArrTime;       // current packet arrival time
-   timeval m_ProbeTime;         // arrival time of the first probing packet
+   uint64_t m_LastArrTime;      // last packet arrival time
+   uint64_t m_CurrArrTime;      // current packet arrival time
+   uint64_t m_ProbeTime;        // arrival time of the first probing packet
+
+private:
+   CPktTimeWindow(const CPktTimeWindow&);
+   CPktTimeWindow &operator=(const CPktTimeWindow&);
 };
 
 

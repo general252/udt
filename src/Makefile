@@ -1,4 +1,4 @@
-C++ = g++
+C++ = g++ 
 
 ifndef os
    os = LINUX
@@ -8,10 +8,7 @@ ifndef arch
    arch = IA32
 endif
 
-CCFLAGS = -fPIC -Wall -D$(os) -finline-functions -O3
-
-CCFLAGS += -DNO_BUSY_WAITING
-#CCFLAGS += -DCUSTOM_CC
+CCFLAGS = -fPIC -Wall -Wextra -D$(os) -finline-functions -O3 -fno-strict-aliasing #-msse3
 
 ifeq ($(arch), IA32)
    CCFLAGS += -DIA32
@@ -22,7 +19,7 @@ ifeq ($(arch), POWERPC)
 endif
 
 ifeq ($(arch), SPARC)
-   CCFLAGS += -mcpu=sparc
+   CCFLAGS += -DSPARC
 endif
 
 ifeq ($(arch), IA64)
@@ -33,7 +30,7 @@ ifeq ($(arch), AMD64)
    CCFLAGS += -DAMD64
 endif
 
-OBJS = common.o window.o list.o buffer.o packet.o channel.o core.o api.o ccc.o
+OBJS = md5.o common.o window.o list.o buffer.o packet.o channel.o queue.o ccc.o cache.o core.o epoll.o api.o
 DIR = $(shell pwd)
 
 all: libudt.so libudt.a udt
