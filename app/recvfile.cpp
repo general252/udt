@@ -1,6 +1,7 @@
 #ifndef WIN32
 #include <arpa/inet.h>
 #endif
+#include <fstream>
 #include <iostream>
 #include <cstdlib>
 #include <udt.h>
@@ -55,9 +56,9 @@ int main(int argc, char* argv[])
 
 
    // get size information
-   __int64 size;
+   long long size;
 
-   if (UDT::ERROR == UDT::recv(fhandle, (char*)&size, sizeof(__int64), 0))
+   if (UDT::ERROR == UDT::recv(fhandle, (char*)&size, sizeof(long long), 0))
    {
       cout << "send: " << UDT::getlasterror().getErrorMessage() << endl;
       return 0;
@@ -66,7 +67,7 @@ int main(int argc, char* argv[])
 
    // receive the file
    ofstream ofs(argv[4], ios::out | ios::binary | ios::trunc);
-   __int64 recvsize; 
+   long long recvsize; 
 
    if (UDT::ERROR == (recvsize = UDT::recvfile(fhandle, ofs, 0, size)))
    {
